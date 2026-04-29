@@ -364,10 +364,6 @@ async def report_presence(date: Optional[str] = None):
         date = datetime.date.today().isoformat()
     return {"date": date, "present": await db_get_presence(date)}
 
-# ── Static ────────────────────────────────────────────────────────
-STATIC_DIR = "/opt/skud/frontend"
-if os.path.exists(STATIC_DIR):
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 # ── Schedules ─────────────────────────────────────────────────────
 from typing import List as TList
 
@@ -537,3 +533,8 @@ async def add_controller(body: dict):
         """, (ip, name))
         await db.commit()
     return {"ok": True}
+
+# ── Static ────────────────────────────────────────────────────────
+STATIC_DIR = "/opt/skud/frontend"
+if os.path.exists(STATIC_DIR):
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

@@ -368,3 +368,172 @@ async def report_presence(date: Optional[str] = None):
 STATIC_DIR = "/opt/skud/frontend"
 if os.path.exists(STATIC_DIR):
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+# ── Schedules ─────────────────────────────────────────────────────
+from typing import List as TList
+
+class ScheduleBody(BaseModel):
+    name:        str
+    description: str = ""
+    mon_start: str=""; mon_end: str=""
+    tue_start: str=""; tue_end: str=""
+    wed_start: str=""; wed_end: str=""
+    thu_start: str=""; thu_end: str=""
+    fri_start: str=""; fri_end: str=""
+    sat_start: str=""; sat_end: str=""
+    sun_start: str=""; sun_end: str=""
+    department_ids: TList[int] = []
+    employee_ids:   TList[int] = []
+
+@app.get("/api/schedules")
+async def get_schedules():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT s.*,
+                   GROUP_CONCAT(DISTINCT ds.department_id) as dept_ids,
+                   GROUP_CONCAT(DISTINCT es.employee_id)   as emp_ids
+            FROM schedules s
+            LEFT JOIN department_schedules ds ON ds.schedule_id=s.id
+            LEFT JOIN employee_schedules   es ON es.schedule_id=s.id
+            GROUP BY s.id ORDER BY s.name
+        """) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+@app.post("/api/schedules")
+async def create_schedule(b: ScheduleBody):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("""
+            INSERT INTO schedules
+                (name,description,mon_start,mon_end,tue_start,tue_end,
+                 wed_start,wed_end,thu_start,thu_end,fri_start,fri_end,
+                 sat_start,sat_end,sun_start,sun_end)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (b.name,b.description,b.mon_start,b.mon_end,b.tue_start,b.tue_end,
+              b.wed_start,b.wed_end,b.thu_start,b.thu_end,b.fri_start,b.fri_end,
+              b.sat_start,b.sat_end,b.sun_start,b.sun_end))
+        sid = cur.lastrowid
+        for did in b.department_ids:
+            await db.execute("INSERT OR IGNORE INTO department_schedules VALUES (?,?)",(did,sid))
+        for eid in b.employee_ids:
+            await db.execute("INSERT OR IGNORE INTO employee_schedules VALUES (?,?)",(eid,sid))
+        await db.commit()
+        return {"id": sid, "ok": True}
+
+@app.put("/api/schedules/{sid}")
+async def update_schedule(sid: int, b: ScheduleBody):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            UPDATE schedules SET name=?,description=?,
+                mon_start=?,mon_end=?,tue_start=?,tue_end=?,
+                wed_start=?,wed_end=?,thu_start=?,thu_end=?,
+                fri_start=?,fri_end=?,sat_start=?,sat_end=?,
+                sun_start=?,sun_end=? WHERE id=?
+        """, (b.name,b.description,b.mon_start,b.mon_end,b.tue_start,b.tue_end,
+              b.wed_start,b.wed_end,b.thu_start,b.thu_end,b.fri_start,b.fri_end,
+              b.sat_start,b.sat_end,b.sun_start,b.sun_end,sid))
+        await db.execute("DELETE FROM department_schedules WHERE schedule_id=?",(sid,))
+        await db.execute("DELETE FROM employee_schedules WHERE schedule_id=?",(sid,))
+        for did in b.department_ids:
+            await db.execute("INSERT OR IGNORE INTO department_schedules VALUES (?,?)",(did,sid))
+        for eid in b.employee_ids:
+            await db.execute("INSERT OR IGNORE INTO employee_schedules VALUES (?,?)",(eid,sid))
+        await db.commit()
+        return {"ok": True}
+
+@app.delete("/api/schedules/{sid}")
+async def delete_schedule(sid: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM schedules WHERE id=?",(sid,))
+        await db.commit()
+        return {"ok": True}
+
+# ── Users ─────────────────────────────────────────────────────────
+class UserBody(BaseModel):
+    username:  str
+    password:  str = ""
+    role:      str = "viewer"
+    full_name: str = ""
+
+@app.get("/api/users")
+async def get_users():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id,username,role,full_name,created_at FROM users ORDER BY full_name"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+@app.post("/api/users")
+async def create_user(b: UserBody):
+    pw = hashlib.sha256(b.password.encode()).hexdigest() if b.password else ""
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            cur = await db.execute(
+                "INSERT INTO users (username,password,role,full_name) VALUES (?,?,?,?)",
+                (b.username, pw, b.role, b.full_name))
+            await db.commit()
+            return {"id": cur.lastrowid, "ok": True}
+        except Exception as e:
+            raise HTTPException(400, f"Пользователь уже существует: {e}")
+
+@app.put("/api/users/{uid}")
+async def update_user(uid: int, b: UserBody):
+    async with aiosqlite.connect(DB_PATH) as db:
+        if b.password:
+            pw = hashlib.sha256(b.password.encode()).hexdigest()
+            await db.execute(
+                "UPDATE users SET username=?,password=?,role=?,full_name=? WHERE id=?",
+                (b.username, pw, b.role, b.full_name, uid))
+        else:
+            await db.execute(
+                "UPDATE users SET username=?,role=?,full_name=? WHERE id=?",
+                (b.username, b.role, b.full_name, uid))
+        await db.commit()
+        return {"ok": True}
+
+@app.delete("/api/users/{uid}")
+async def delete_user(uid: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM users WHERE id=?",(uid,))
+        await db.commit()
+        return {"ok": True}
+
+# ── Controller Discovery ──────────────────────────────────────────
+@app.post("/api/controllers/discover")
+async def discover_controllers(body: dict):
+    import socket as _socket
+    ip = body.get("ip","").strip()
+    results = []
+    if ip:
+        try:
+            sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+            sock.settimeout(2)
+            probe = bytes([0x23,0x00,0x08,0x00,0xFF,0x00,0x00,0x00])
+            sock.sendto(probe, (ip, 7715))
+            try:
+                data, addr = sock.recvfrom(1024)
+                results.append({"ip": addr[0], "status": "online"})
+            except:
+                results.append({"ip": ip, "status": "no_response"})
+            sock.close()
+        except Exception as e:
+            results.append({"ip": ip, "status": "no_response"})
+    else:
+        from udp_daemon import controllers
+        for cip, info in controllers.items():
+            results.append({"ip": cip, "mac": info.get("mac",""), "status": "online"})
+    return {"controllers": results}
+
+@app.post("/api/controllers/add")
+async def add_controller(body: dict):
+    ip   = body.get("ip","").strip()
+    name = body.get("name", ip)
+    if not ip:
+        raise HTTPException(400, "IP обязателен")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT OR IGNORE INTO controllers (ip, name) VALUES (?,?)
+            ON CONFLICT(ip) DO UPDATE SET name=excluded.name
+        """, (ip, name))
+        await db.commit()
+    return {"ok": True}

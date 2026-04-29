@@ -1,0 +1,9 @@
+data/
+backend/__pycache__/
+*.pyc
+*.fdb
+*.db
+frontend/photos/
+frontend/assets/
+node_modules/
+frontend/photos/
